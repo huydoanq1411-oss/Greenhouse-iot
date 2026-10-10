@@ -3,6 +3,9 @@
 #include <PubSubClient.h>
 #include <DHT.h>
 #include <LiquidCrystal_I2C.h>
+#include <ESP32Servo.h>
+#include <Preferences.h>
+#include <time.h>
 
 // ---------- Chân ----------
 #define DHTPIN 15
@@ -13,6 +16,7 @@
 #define PUMP_PIN 27
 #define LIGHT_PIN 25
 #define BUZZER_PIN 14
+#define SERVO_PIN 13
 
 // ---------- WiFi + MQTT ----------
 const char* WIFI_SSID = "Wokwi-GUEST";
@@ -31,12 +35,51 @@ const int   LIGHT_ON = 30,   LIGHT_OFF = 40;   // bật đèn khi tối dưới 
 
 DHT dht(DHTPIN, DHTTYPE);
 LiquidCrystal_I2C lcd(0x27, 16, 2);
+Servo roofServo;
+Preferences preferences;
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
 
 bool autoMode = true;
 bool fanOn = false, pumpOn = false, lampOn = false;
+bool waterScheduleEnabled = false, scheduledWatering = false;
+uint8_t waterHour = 7, waterMinute = 0, waterDuration = 5;
+uint8_t servoAngle = 0;
+int lastWaterDay = -1;
+unsigned long wateringUntil = 0;
 unsigned long lastRead = 0, lastReconnect = 0;
+
+void saveWaterSchedule() {
+  preferences.putBool("schedule", waterScheduleEnabled);
+  preferences.putUChar("hour", waterHour);
+  preferences.putUChar("minute", waterMinute);
+  preferences.putUChar("duration", waterDuration);
+}
+
+void updateWaterSchedule() {
+  if (scheduledWatering && (long)(millis() - wateringUntil) >= 0) {
+    scheduledWatering = false;
+    pumpOn = false;
+    digitalWrite(PUMP_PIN, LOW);
+  }
+
+  if (!waterScheduleEnabled || scheduledWatering) return;
+
+  struct tm localTime;
+  if (!getLocalTime(&localTime, 0) || localTime.tm_year < (2024 - 1900)) return;
+  const int today = (localTime.tm_year + 1900) * 10000 +
+                    (localTime.tm_mon + 1) * 100 + localTime.tm_mday;
+  if (today == lastWaterDay || localTime.tm_hour != waterHour ||
+      localTime.tm_min != waterMinute) return;
+
+  lastWaterDay = today;
+  preferences.putInt("lastDay", lastWaterDay);
+  scheduledWatering = true;
+  wateringUntil = millis() + (unsigned long)waterDuration * 60000UL;
+  pumpOn = true;
+  digitalWrite(PUMP_PIN, HIGH);
+  Serial.printf("Tuoi theo lich: %u phut\n", waterDuration);
+}
 
 // Nhận lệnh từ dashboard
 void callback(char* topic, byte* payload, unsigned int length) {
@@ -46,7 +89,33 @@ void callback(char* topic, byte* payload, unsigned int length) {
   msg.toUpperCase();
   Serial.println("CMD: " + msg);
 
-  if (msg == "AUTO") {
+  if (msg.startsWith("WATER_SCHEDULE=")) {
+    int hour, minute, duration;
+    if (sscanf(msg.c_str(), "WATER_SCHEDULE=%d:%d,%d", &hour, &minute, &duration) != 3 ||
+        hour < 0 || hour > 23 || minute < 0 || minute > 59 ||
+        duration < 1 || duration > 120) {
+      Serial.println("Lich tuoi khong hop le");
+      return;
+    }
+    waterHour = hour;
+    waterMinute = minute;
+    waterDuration = duration;
+    waterScheduleEnabled = true;
+    saveWaterSchedule();
+  } else if (msg == "WATER_SCHEDULE_OFF") {
+    waterScheduleEnabled = false;
+    if (scheduledWatering) pumpOn = false;
+    scheduledWatering = false;
+    saveWaterSchedule();
+  } else if (msg.startsWith("SERVO=")) {
+    const int angle = msg.substring(6).toInt();
+    if (angle < 0 || angle > 180) {
+      Serial.println("Goc servo khong hop le");
+      return;
+    }
+    servoAngle = angle;
+    roofServo.write(servoAngle);
+  } else if (msg == "AUTO") {
     autoMode = true;
   } else if (msg == "MANUAL") {
     autoMode = false;
@@ -105,10 +174,21 @@ void setup() {
   pinMode(PUMP_PIN, OUTPUT);
   pinMode(LIGHT_PIN, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(SERVO_PIN, OUTPUT);
+  roofServo.setPeriodHertz(50);
+  roofServo.attach(SERVO_PIN, 500, 2400);
+  roofServo.write(servoAngle);
+  preferences.begin("greenhouse", false);
+  waterScheduleEnabled = preferences.getBool("schedule", false);
+  waterHour = preferences.getUChar("hour", 7);
+  waterMinute = preferences.getUChar("minute", 0);
+  waterDuration = preferences.getUChar("duration", 5);
+  lastWaterDay = preferences.getInt("lastDay", -1);
 
   lcd.setCursor(0, 0);
   lcd.print("Dang ket noi...");
   connectWiFi();
+  configTime(7 * 3600, 0, "pool.ntp.org", "time.google.com");
   lcd.clear();
 
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
@@ -118,6 +198,7 @@ void setup() {
 void loop() {
   if (!mqtt.connected()) reconnectMqtt();
   mqtt.loop();                       // bắt buộc gọi liên tục để nhận lệnh
+  updateWaterSchedule();
 
   if (millis() - lastRead < 2000) return;   // đọc cảm biến mỗi 2 giây
   lastRead = millis();
@@ -137,8 +218,10 @@ void loop() {
     if (t > TEMP_ON)       fanOn = true;
     else if (t < TEMP_OFF) fanOn = false;
 
-    if (soil < SOIL_ON)        pumpOn = true;
-    else if (soil > SOIL_OFF)  pumpOn = false;
+    if (!scheduledWatering) {
+      if (soil < SOIL_ON)        pumpOn = true;
+      else if (soil > SOIL_OFF)  pumpOn = false;
+    }
 
     if (light < LIGHT_ON)        lampOn = true;
     else if (light > LIGHT_OFF)  lampOn = false;
@@ -156,11 +239,14 @@ void loop() {
   lcd.printf("S:%d%% L:%d%%  ", soil, light);
 
   // Gửi dữ liệu dạng JSON lên MQTT
-  char json[160];
+  char json[240];
   snprintf(json, sizeof(json),
     "{\"temp\":%.1f,\"hum\":%.0f,\"soil\":%d,\"light\":%d,"
-    "\"fan\":%d,\"pump\":%d,\"lamp\":%d,\"auto\":%d}",
-    t, h, soil, light, fanOn, pumpOn, lampOn, autoMode);
+    "\"fan\":%d,\"pump\":%d,\"lamp\":%d,\"auto\":%d,"
+    "\"servo\":%d,\"scheduleEnabled\":%d,\"waterHour\":%d,"
+    "\"waterMinute\":%d,\"waterDuration\":%d}",
+    t, h, soil, light, fanOn, pumpOn, lampOn, autoMode, servoAngle,
+    waterScheduleEnabled, waterHour, waterMinute, waterDuration);
 
   if (mqtt.connected()) mqtt.publish(TOPIC_DATA, json);
   Serial.println(json);

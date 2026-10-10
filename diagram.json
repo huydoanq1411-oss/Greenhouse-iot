@@ -36,6 +36,7 @@
       "attrs": { "color": "yellow" }
     },
     { "type": "wokwi-buzzer", "id": "bz1", "top": 252, "left": -171, "attrs": {} },
+    { "type": "wokwi-servo", "id": "roofServo", "top": -85, "left": -155, "attrs": {} },
     { "type": "wokwi-resistor", "id": "r1", "top": 90, "left": -230, "attrs": { "value": "220" } },
     {
       "type": "wokwi-resistor",
@@ -76,7 +77,10 @@
     [ "r3:1", "lamp:A", "yellow", [ "v24.35", "h115" ] ],
     [ "lamp:C", "esp:GND.2", "black", [ "v9.6", "h58", "v-91" ] ],
     [ "esp:D14", "bz1:2", "red", [ "h-57.6", "v211.3" ] ],
-    [ "bz1:1", "esp:GND.2", "black", [ "v9.6", "h115.2", "v-196.6" ] ]
+    [ "bz1:1", "esp:GND.2", "black", [ "v9.6", "h115.2", "v-196.6" ] ],
+    [ "roofServo:V+", "esp:VIN", "red", [ "h80", "v-35" ] ],
+    [ "roofServo:GND", "esp:GND.1", "black", [ "h100", "v70" ] ],
+    [ "roofServo:PWM", "esp:D13", "orange", [ "h115", "v95" ] ]
   ],
   "dependencies": {}
 }

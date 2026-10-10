@@ -101,6 +101,13 @@
     .legend i { width: 7px; height: 7px; display: inline-block; border-radius: 50%; background: var(--orange); }
     .legend span:nth-child(2) i { background: #4e8eaa; }
     .chart-wrap { height: 245px; min-width: 0; margin-top: 17px; }
+    .export-button, .small-button {
+      display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      min-height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px;
+      background: white; color: var(--ink); cursor: pointer; font-size: 10px; font-weight: 700;
+    }
+    .export-button svg, .small-button svg { width: 14px; height: 14px; }
+    .export-button:disabled { cursor: not-allowed; opacity: .5; }
     .side-stack { display: grid; grid-template-rows: auto 1fr; gap: 14px; }
     .environment { padding: 19px 20px 17px; }
     .sensor-row { margin-top: 19px; }
@@ -137,6 +144,17 @@
     .system-foot { display: flex; justify-content: space-between; gap: 12px; margin-top: 16px; color: var(--muted); font-size: 10px; }
     .system-foot span { display: flex; align-items: center; gap: 6px; }
     .system-foot svg { width: 13px; height: 13px; }
+    .feature-panel { padding: 18px 20px; }
+    .feature-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(90px, .7fr); gap: 10px; margin-top: 14px; }
+    .field-label { display: grid; gap: 6px; color: var(--muted); font-size: 10px; }
+    .field-label input:not([type="checkbox"]) { width: 100%; min-height: 36px; padding: 0 9px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: white; font: 11px "DM Mono", monospace; }
+    .feature-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
+    .check-label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
+    .check-label input { accent-color: var(--green); }
+    .servo-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; margin-top: 16px; }
+    .servo-row input { width: 100%; accent-color: var(--green); }
+    .servo-angle { min-width: 42px; color: var(--green); font: 12px "DM Mono", monospace; text-align: right; }
+    .servo-presets { display: flex; gap: 8px; margin-top: 12px; }
     .toast {
       position: fixed; right: 22px; bottom: 22px; max-width: min(360px, calc(100vw - 44px));
       padding: 12px 15px; color: white; background: #20372c; border-radius: 6px;
@@ -218,7 +236,7 @@
         <article class="panel chart-panel">
           <div class="panel-head">
             <div><h2 class="panel-title">Diễn biến môi trường</h2><div class="panel-caption">Lịch sử 30 lần đo gần nhất</div></div>
-            <div class="legend"><span><i></i>Nhiệt độ</span><span><i></i>Độ ẩm</span></div>
+            <div style="display:flex;align-items:center;gap:14px"><div class="legend"><span><i></i>Nhiệt độ</span><span><i></i>Độ ẩm</span></div><button class="export-button" id="exportCsv" title="Xuất dữ liệu thành CSV" disabled><i data-lucide="download"></i>CSV</button></div>
           </div>
           <div class="chart-wrap"><canvas id="historyChart" aria-label="Biểu đồ nhiệt độ và độ ẩm"></canvas></div>
         </article>
@@ -249,6 +267,19 @@
             </div>
             <div class="control-foot"><span id="modeLabel">Đang chạy tự động</span><span id="updateLabel">Chờ dữ liệu</span></div>
           </article>
+          <article class="panel feature-panel">
+            <div class="panel-head"><div><h2 class="panel-title">Hẹn giờ tưới</h2><div class="panel-caption" id="scheduleState">Chưa nhận cấu hình từ ESP32</div></div><i data-lucide="calendar-clock" aria-hidden="true"></i></div>
+            <div class="feature-fields">
+              <label class="field-label">Giờ tưới (UTC+7)<input id="waterTime" type="time" value="07:00"></label>
+              <label class="field-label">Thời lượng (phút)<input id="waterDuration" type="number" min="1" max="120" value="5"></label>
+            </div>
+            <div class="feature-actions"><label class="check-label"><input id="scheduleEnabled" type="checkbox"> Bật lịch hằng ngày</label><button class="small-button" id="saveSchedule" title="Lưu lịch tưới"><i data-lucide="save"></i>Lưu lịch</button></div>
+          </article>
+          <article class="panel feature-panel">
+            <div class="panel-head"><div><h2 class="panel-title">Mái che / cửa thông gió</h2><div class="panel-caption">Điều khiển vị trí servo</div></div><i data-lucide="move-vertical" aria-hidden="true"></i></div>
+            <div class="servo-row"><input id="servoAngle" type="range" min="0" max="180" step="1" value="0" aria-label="Góc servo"><output class="servo-angle" id="servoAngleLabel">0°</output></div>
+            <div class="servo-presets"><button class="small-button" data-servo-angle="0">Đóng</button><button class="small-button" data-servo-angle="90">Mở</button></div>
+          </article>
         </div>
       </section>
       <footer class="system-foot"><span><i data-lucide="cpu"></i>ESP32 · greenhouse controller</span><span id="statusLabel">Chưa nhận trạng thái thiết bị</span></footer>
@@ -261,6 +292,7 @@
     const TOPIC_CMD = "qhuy-greenhouse/cmd";
     const TOPIC_STATUS = "qhuy-greenhouse/status";
     const history = { labels: [], temperature: [], humidity: [] };
+    const records = [];
     const devices = { fan: false, pump: false, lamp: false };
     let automatic = true;
     let toastTimer;
@@ -339,18 +371,34 @@
         document.getElementById("lightBar").style.width = `${Math.max(0, Math.min(100, data.light))}%`;
       }
       if (Number.isFinite(data.temp) && Number.isFinite(data.hum)) {
-        history.labels.push(new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+        const sampleTime = new Date();
+        history.labels.push(sampleTime.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
         history.temperature.push(data.temp);
         history.humidity.push(data.hum);
+        records.push({ timestamp: sampleTime.toISOString(), temp: data.temp, hum: data.hum, soil: data.soil, light: data.light, fan: data.fan, pump: data.pump, lamp: data.lamp, auto: data.auto, servo: data.servo });
         if (history.labels.length > 30) {
           history.labels.shift(); history.temperature.shift(); history.humidity.shift();
+          records.shift();
         }
+        document.getElementById("exportCsv").disabled = records.length === 0;
         chart.update();
       }
       setMode(Boolean(data.auto));
       setDevice("fan", data.fan);
       setDevice("pump", data.pump);
       setDevice("lamp", data.lamp);
+      if (Number.isFinite(data.servo)) setServoAngle(data.servo);
+      if (Number.isFinite(data.waterHour) && Number.isFinite(data.waterMinute) && Number.isFinite(data.waterDuration)) {
+        const scheduleFocused = document.activeElement.closest?.(".feature-panel") === document.querySelector(".feature-panel");
+        if (!scheduleFocused) {
+          document.getElementById("waterTime").value = `${String(data.waterHour).padStart(2, "0")}:${String(data.waterMinute).padStart(2, "0")}`;
+          document.getElementById("waterDuration").value = data.waterDuration;
+          document.getElementById("scheduleEnabled").checked = Boolean(data.scheduleEnabled);
+        }
+        document.getElementById("scheduleState").textContent = data.scheduleEnabled
+          ? `Đang bật · ${String(data.waterHour).padStart(2, "0")}:${String(data.waterMinute).padStart(2, "0")} mỗi ngày · ${data.waterDuration} phút`
+          : "Lịch đang tắt";
+      }
       document.getElementById("updateLabel").textContent = `Nhận lúc ${new Date().toLocaleTimeString("vi-VN")}`;
     }
 
@@ -394,6 +442,47 @@
         else showToast(`Đã gửi lệnh ${command}.`);
       });
     }
+
+    function setServoAngle(angle) {
+      const safeAngle = Math.max(0, Math.min(180, Number(angle) || 0));
+      document.getElementById("servoAngle").value = safeAngle;
+      document.getElementById("servoAngleLabel").textContent = `${safeAngle}°`;
+    }
+
+    document.getElementById("exportCsv").addEventListener("click", () => {
+      if (!records.length) return;
+      const columns = ["timestamp", "temp_c", "humidity_percent", "soil_percent", "light_percent", "fan_on", "pump_on", "lamp_on", "auto_mode", "servo_degrees"];
+      const rows = records.map(record => [record.timestamp, record.temp, record.hum, record.soil, record.light, record.fan, record.pump, record.lamp, record.auto, record.servo]);
+      const csv = [columns, ...rows].map(row => row.map(value => `"${String(value ?? "").replaceAll('"', '""')}"`).join(",")).join("\r\n");
+      const url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `greenhouse-${new Date().toISOString().slice(0, 10)}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+    });
+
+    document.getElementById("saveSchedule").addEventListener("click", () => {
+      const time = document.getElementById("waterTime").value;
+      const duration = Number(document.getElementById("waterDuration").value);
+      if (!time || !Number.isInteger(duration) || duration < 1 || duration > 120) {
+        showToast("Thời lượng tưới phải từ 1 đến 120 phút.");
+        return;
+      }
+      sendCommand(document.getElementById("scheduleEnabled").checked
+        ? `WATER_SCHEDULE=${time},${duration}`
+        : "WATER_SCHEDULE_OFF");
+    });
+
+    const servoControl = document.getElementById("servoAngle");
+    servoControl.addEventListener("input", () => setServoAngle(servoControl.value));
+    servoControl.addEventListener("change", () => sendCommand(`SERVO=${servoControl.value}`));
+    document.querySelectorAll("[data-servo-angle]").forEach(button => {
+      button.addEventListener("click", () => {
+        setServoAngle(button.dataset.servoAngle);
+        sendCommand(`SERVO=${button.dataset.servoAngle}`);
+      });
+    });
 
     document.getElementById("autoButton").addEventListener("click", () => sendCommand("AUTO"));
     document.getElementById("manualButton").addEventListener("click", () => sendCommand("MANUAL"));

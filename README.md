@@ -31,6 +31,7 @@
 - Hiển thị nhiệt độ, độ ẩm không khí, độ ẩm đất, ánh sáng và chế độ lên LCD I2C 16x2.
 - Gửi số liệu định kỳ qua MQTT; nhận lệnh từ dashboard hoặc MQTT client khác.
 - Dashboard theo dõi số liệu trực tiếp, vẽ tối đa 30 mẫu gần nhất, hiển thị kết nối và điều khiển thiết bị.
+- Xuất tối đa 30 mẫu đang hiển thị thành CSV; hẹn giờ tưới hằng ngày lưu trong ESP32; điều khiển góc servo mái che/cửa thông gió.
 
 Độ ẩm không khí hiện chỉ được giám sát, **không tham gia logic tự động bật/tắt thiết bị**.
 
@@ -74,6 +75,7 @@ Firmware đọc cảm biến mỗi 2 giây. Khi MQTT đã kết nối và DHT22 
 - Cảm biến quang trở, lấy ngõ ra analog AO.
 - Ba LED xanh dương, xanh lá, vàng cùng điện trở 220 Ω để biểu diễn quạt, bơm, đèn.
 - Buzzer.
+- Servo SG90 (hoặc servo tương thích) để mô phỏng mái che/cửa thông gió.
 
 ### Bảng chân
 
@@ -88,6 +90,7 @@ Firmware đọc cảm biến mỗi 2 giây. Khi MQTT đã kết nối và DHT22 
 | LED bơm | GPIO 27 | Đi qua điện trở 220 Ω; firmware bật mức HIGH. |
 | LED đèn | GPIO 25 | Đi qua điện trở 220 Ω; firmware bật mức HIGH. |
 | Buzzer | GPIO 14 | Firmware bật khi nhiệt độ vượt ngưỡng báo động. |
+| Servo mái che/cửa thông gió | GPIO 13 | PWM 50 Hz; góc điều khiển 0-180°. Cấp nguồn theo yêu cầu servo và nối chung GND. |
 
 Trong `diagram.json`, LCD được cấp VCC từ chân VIN của board mô phỏng; các cảm biến analog được cấp 3V3. Tất cả thiết bị phải có GND chung. Khi lắp mạch thật, kiểm tra điện áp hoạt động và sơ đồ chân của đúng module đang dùng; không cấp tín hiệu cao hơn mức cho phép của ESP32.
 
@@ -196,12 +199,39 @@ Thay đổi trong C++ không tự có hiệu lực ở binary cũ: cần build l
 1. Khởi động ESP32 mô phỏng hoặc thiết bị thật và chờ thiết bị kết nối MQTT.
 2. Mở [dashboard.html](dashboard.html) trong trình duyệt; có thể mở trực tiếp file, không cần web server.
 3. Cho phép trình duyệt truy cập Internet. Trang tải thư viện giao diện từ CDN và kết nối broker qua `wss://broker.hivemq.com:8884/mqtt`.
-4. Chờ trạng thái MQTT hiển thị đã kết nối và chờ bản tin cảm biến đầu tiên. Trước khi nhận dữ liệu, các chỉ số hiển thị `--` và điều khiển bị khóa.
+4. Chờ trạng thái MQTT hiển thị đã kết nối và chờ bản tin cảm biến đầu tiên. Trước khi nhận dữ liệu, các chỉ số hiển thị `--`; nút bật/tắt thiết bị chỉ dùng được ở chế độ THỦ CÔNG.
 5. Ở **TỰ ĐỘNG**, quan sát thiết bị theo ngưỡng trong mục [Logic điều khiển](#5-logic-điều-khiển); công tắc từng thiết bị bị khóa để tránh điều khiển tay xung đột với AUTO.
 6. Chọn **THỦ CÔNG** để bật/tắt riêng Quạt, Máy bơm hoặc Đèn. Giao diện gửi lệnh MQTT; trạng thái hiển thị được đồng bộ lại từ telemetry của firmware.
 7. Chọn **TỰ ĐỘNG** để trả quyền điều khiển cho ngưỡng cảm biến.
+8. Đặt giờ tưới UTC+7, thời lượng 1-120 phút và bật **Bật lịch hằng ngày**, sau đó chọn **Lưu lịch**. ESP32 lưu cấu hình trong bộ nhớ Preferences và tự chạy kể cả khi đóng dashboard; cần kết nối Wi-Fi và đồng bộ thời gian NTP.
+9. Lịch tưới chạy mỗi ngày một lần theo giờ UTC+7, kể cả ở chế độ MANUAL. Khi tới giờ, lịch bật bơm trong thời lượng đã đặt; tắt lịch khi lượt tưới đang chạy sẽ dừng bơm ngay. Sau khi khởi động lại, cấu hình lịch được khôi phục nhưng thời gian vẫn cần đồng bộ NTP.
+10. Dùng thanh trượt hoặc nút **Đóng/Mở** để đặt servo trong khoảng 0-180°. Vị trí servo hiện không được lưu bền; sau khi ESP32 khởi động lại, servo trở về 0°.
+11. Chọn **CSV** trên biểu đồ để tải tối đa 30 mẫu được nhận trong phiên dashboard hiện tại.
 
-Biểu đồ hiển thị tối đa 30 mẫu được dashboard nhận kể từ khi trang được mở; dữ liệu lịch sử không lưu bền sau khi tải lại trang. Dashboard không điều khiển buzzer.
+Biểu đồ và tệp CSV dùng tối đa 30 mẫu được dashboard nhận kể từ khi trang được mở; dữ liệu mẫu không lưu bền sau khi tải lại trang. Cấu hình lịch tưới được lưu bền trong ESP32. Dashboard không điều khiển buzzer.
+
+### Ý nghĩa các khu vực và cách thao tác
+
+| Khu vực trên dashboard | Cách sử dụng |
+| --- | --- |
+| Nhiệt độ, độ ẩm không khí | Giá trị từ DHT22; cập nhật khi firmware gửi telemetry hợp lệ, khoảng 2 giây một lần. Độ ẩm không khí chỉ để theo dõi. |
+| Độ ẩm đất, cường độ sáng | Giá trị phần trăm quy ước từ các đầu vào analog; có thể thay đổi biến trở và cảm biến quang trở trong Wokwi để quan sát. |
+| Biểu đồ môi trường | Hiển thị tối đa 30 mẫu nhiệt độ và độ ẩm nhận kể từ lúc mở trang. Nút **CSV** tải các mẫu hiện có; tải lại trang sẽ xóa lịch sử trong phiên. |
+| TỰ ĐỘNG / THỦ CÔNG | **TỰ ĐỘNG** để firmware quyết định quạt, bơm, đèn theo ngưỡng ở mục Logic điều khiển. Chọn **THỦ CÔNG** để mở khóa các nút thiết bị. |
+| Quạt, Máy bơm, Đèn | Trong THỦ CÔNG, nhấn nút tương ứng để bật hoặc tắt. Chọn TỰ ĐỘNG sẽ trả quyền điều khiển cho cảm biến. Trạng thái phản hồi được cập nhật từ telemetry tiếp theo. |
+| Hẹn giờ tưới | Nhập giờ UTC+7 và thời lượng 1-120 phút, đánh dấu bật lịch rồi chọn **Lưu lịch**. Bỏ đánh dấu và lưu để tắt lịch. Lịch được lưu trên ESP32, chạy hằng ngày độc lập với dashboard và có thể bật bơm cả ở chế độ MANUAL. |
+| Mái che / cửa thông gió | Kéo thanh trượt để chọn 0-180°; góc được gửi khi thả thanh trượt. **Đóng** đặt 0°, **Mở** đặt 90°. Góc hiện không được lưu sau khi ESP32 khởi động lại. |
+| Trạng thái kết nối | MQTT và trạng thái ESP32 được hiển thị riêng. MQTT có thể kết nối trước khi ESP32 gửi dữ liệu; chờ telemetry trước khi kết luận cảm biến đang hoạt động. |
+
+### Thao tác nhanh trong Wokwi
+
+1. Chạy mô phỏng và đợi Serial Monitor báo `WiFi OK`, `MQTT OK`; sau đó mở dashboard để xem dữ liệu.
+2. Chọn DHT22 trong sơ đồ để thay nhiệt độ/độ ẩm; xoay biến trở để thay đổi độ ẩm đất; thay đổi mức sáng của quang trở để xem giá trị ánh sáng.
+3. Để thử AUTO, đặt nhiệt độ trên 32 °C để bật quạt, độ ẩm đất dưới 35% để bật bơm, hoặc ánh sáng dưới 30% để bật đèn. Hạ/tăng qua ngưỡng tắt tương ứng trong bảng Logic điều khiển để xác nhận hysteresis.
+4. Để thử MANUAL, chọn **THỦ CÔNG**, nhấn từng nút và quan sát LED tương ứng trong sơ đồ. Chọn **TỰ ĐỘNG** để chuyển lại.
+5. Có thể dùng thanh trượt servo trên dashboard và quan sát góc servo trong Wokwi. Thử lịch tưới bằng cách đặt giờ UTC+7 gần thời điểm hiện tại; cần Wi-Fi và NTP hoạt động để ESP32 biết giờ.
+
+Các thay đổi lệnh điều khiển có thể xuất hiện trên giao diện sau telemetry kế tiếp. Nếu dashboard kết nối nhưng các ô vẫn là `--`, kiểm tra mô phỏng/ESP32, DHT22 và topic MQTT theo mục [Khắc phục sự cố](#13-khắc-phục-sự-cố).
 
 ## 10. Giao thức MQTT
 
@@ -243,6 +273,10 @@ Firmware publish một JSON mỗi chu kỳ đọc 2 giây nếu MQTT đang kết
 | `pump` | `0` hoặc `1` | Trạng thái bơm: tắt/bật. |
 | `lamp` | `0` hoặc `1` | Trạng thái đèn: tắt/bật. |
 | `auto` | `0` hoặc `1` | Chế độ Manual/Auto. |
+| `servo` | số nguyên 0-180 | Góc servo mái che/cửa thông gió. |
+| `scheduleEnabled` | `0` hoặc `1` | Lịch tưới hằng ngày đang bật/tắt. |
+| `waterHour`, `waterMinute` | số nguyên | Giờ/phút tưới theo UTC+7. |
+| `waterDuration` | số nguyên | Thời lượng tưới tính bằng phút. |
 
 Nếu DHT22 lỗi, firmware in `Loi doc DHT22!` rồi bỏ qua chu kỳ đó; không gửi telemetry trong chu kỳ lỗi.
 
@@ -257,6 +291,9 @@ Payload là chuỗi UTF-8 đơn giản. Firmware trim khoảng trắng và khôn
 | `FAN_ON`, `FAN_OFF` | Bật/tắt quạt và chuyển sang MANUAL. |
 | `PUMP_ON`, `PUMP_OFF` | Bật/tắt bơm và chuyển sang MANUAL. |
 | `LAMP_ON`, `LAMP_OFF` | Bật/tắt đèn và chuyển sang MANUAL. |
+| `WATER_SCHEDULE=HH:MM,DURATION` | Bật/cập nhật lịch tưới hằng ngày theo UTC+7; thời lượng từ 1 đến 120 phút. |
+| `WATER_SCHEDULE_OFF` | Tắt lịch; nếu lượt tưới theo lịch đang chạy thì dừng bơm ngay. |
+| `SERVO=DEGREES` | Đặt servo ở góc 0-180; `0` đóng và `90` mở theo cấu hình mô phỏng. |
 
 Lệnh khác bị bỏ qua và được ghi `Lenh khong hop le` ra Serial. Firmware chỉ subscribe topic lệnh đã cấu hình.
 
